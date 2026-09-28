@@ -29,4 +29,4 @@ docker build -f Dockerfile-multistage -t <dockerhub-user>/coit-backend1 .
 > `GKE_SA_KEY` must contain the GCP service account JSON key. The stage and prod folders currently hold cert-manager issuers and RBAC only, so add a Deployment and Service there to run the API on the cluster.
 
 ## Branches
-`feature` (default), `stage`
+`main` (default), `stage` (CI runs on pushes to `stage`)
