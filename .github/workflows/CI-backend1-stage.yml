@@ -1,125 +1,70 @@
+# CI for the Spring Boot web API: scan, build and test with Maven, build and push the image, then apply the stage manifests on GKE.
+name: CI-backend1-stage
 
-# This is a basic workflow to help you get started with Actions
-
-name: CI-coit-frontend-stage
-
-# Controls when the workflow will run
 on:
-  # Triggers the workflow on push or pull request events but only for the "master" branch
   push:
     branches: [ "stage" ]
   pull_request:
     branches: [ "stage" ]
-
-  # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
-#global environment variable 
-env: 
-  sonar_scanner_version: 4.7.0.2747-linux
-  PROJECT_ID: ${{ secrets.GKE_PROJECT }}
-  GKE_CLUSTER: champion2 # Add your cluster name here.
-  GKE_ZONE: us-west1-a # Add your cluster zone here.
+env:
+  IMAGE: nixvarghese03/coit-backend1
+  GKE_CLUSTER: champion2   # cluster name
+  GKE_ZONE: us-west1-a     # cluster zone
 
-
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
-  # This workflow contains a single job called "build"
-  build:
-      # The type of runner that the job will run on
+  build-and-deploy:
     runs-on: ubuntu-latest
-
-    # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
-       # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-       - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-       # setup sonar scanner 
-       - name: Setup Sonar-Scanner
-         run: | 
-          wget "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-$sonar_scanner_version.zip"
-          unzip sonar-scanner-cli-$sonar_scanner_version.zip -d $HOME/sonarqube
-          chmod 755 $HOME/sonarqube/sonar-scanner-$sonar_scanner_version/bin/sonar-scanner
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 8
+          cache: maven
 
-       # scan the project using sonar scanner
-       - name: scan the project
-         env: 
-          sonarqube_project: ${{ secrets.SONARQUBE_PROJECT }}
-          api_key: ${{ secrets.API_KEY }}
-          sonarqube_url: ${{ secrets.SONARQUBE_URL }}
-         run: | 
-           cd coit-frontend
-           $HOME/sonarqube/sonar-scanner-$sonar_scanner_version/bin/sonar-scanner \
-           -Dsonar.projectKey=$sonarqube_project \
-           -Dsonar.sources=. \
-           -Dsonar.host.url=$sonarqube_url \
-           -Dsonar.login=$api_key 
+      - name: Build and test
+        working-directory: coit-backend1
+        run: |
+          chmod +x mvnw
+          ./mvnw -B verify
 
-       # Run unit Test
-       - name: run unit test
-         run: | 
-          cd coit-frontend
-          npm test || true 
+      - name: SonarQube scan
+        working-directory: coit-backend1
+        env:
+          SONARQUBE_PROJECT: ${{ secrets.SONARQUBE_PROJECT }}
+          SONARQUBE_URL: ${{ secrets.SONARQUBE_URL }}
+          SONAR_TOKEN: ${{ secrets.API_KEY }}
+        run: |
+          ./mvnw -B org.sonarsource.scanner.maven:sonar-maven-plugin:3.9.1.2184:sonar \
+            -Dsonar.projectKey=$SONARQUBE_PROJECT \
+            -Dsonar.host.url=$SONARQUBE_URL \
+            -Dsonar.login=$SONAR_TOKEN
 
-       # check vulnerabilities of dependancy 
-       - name: run unit test 
-         run: | 
-          cd coit-frontend
-          npm audit || true
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-       # Docker Login
-       - name: Docker login
-         env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-         run: |
-          docker login -u $DOCKERHUB_USERNAME -p $DOCKERHUB_TOKEN
+      - name: Build and push the image
+        run: |
+          docker build coit-backend1 -f coit-backend1/Dockerfile-multistage -t $IMAGE:latest -t $IMAGE:${{ github.sha }}
+          docker push $IMAGE:latest
+          docker push $IMAGE:${{ github.sha }}
 
-       # Build container image 
-       - name: build container image 
-         run: | 
-          docker build coit-frontend -t nixvarghese03/coit-simple-micro-ga:latest -f coit-frontend/Dockerfile-multistage
+      # GKE_SA_KEY must hold the service account JSON key
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GKE_SA_KEY }}
 
-       # push container image 
-       - name: push container image 
-         run: | 
-          docker push nixvarghese03/coit-simple-micro-ga:latest 
-
-       # Setup gcloud CLI
-       - uses: google-github-actions/setup-gcloud@94337306dda8180d967a56932ceb4ddcf01edae7
-         with:
-          service_account_key: ${{ secrets.GKE_SA_KEY }}
-          project_id: ${{ secrets.GKE_PROJECT }}
-
-       # Get the GKE credentials so we can deploy to the cluster
-       - uses: google-github-actions/get-gke-credentials@fb08709ba27618c31c09e014e1d8364b02e5042e
-         with:
+      - uses: google-github-actions/get-gke-credentials@v2
+        with:
           cluster_name: ${{ env.GKE_CLUSTER }}
           location: ${{ env.GKE_ZONE }}
-          credentials: ${{ secrets.GKE_SA_KEY }}
 
-       # Deploy the Docker image to the GKE cluster
-       - name: Deploy
-         run: |
-          kubectl create namespace stage
-          cd frontend-kustomize-stage
-          kubectl apply -k . 
-
-       # Check the sonarqube report here
-       - name: Check the sonarqube report here
-         run: | 
-          SONAR_URL=`kubectl get svc sonarqube-sonarqube --output jsonpath='{.status.loadBalancer.ingress[0].ip}' -n sonarqube`
-          echo "The SonarQube Reports are available at $SONAR_URL"
-
-       # Wait for 60 seconds and get the preview of the applicaton 
-       - name: Wait for 60 seconds and get the preview of the applicaton
-         run: | 
-          sleep 60
-          PRIVEW_URL=`kubectl get svc -n customer1-frontend-lb-myapp  --output jsonpath='{.status.loadBalancer.ingress[0].ip}' -n stage`
-          echo "This is app preview URL $PRIVEW_URL" 
-
-       # Delete stage namespace 
-       - name: Delete stage namespace
-         run: | 
-          sleep 60
-          kubectl delete namespace stage
+      - name: Apply stage manifests (cert-manager issuers and RBAC)
+        run: |
+          kubectl create namespace stage --dry-run=client -o yaml | kubectl apply -f -
+          kubectl apply -n stage -R -f backend1-kustomize-stage

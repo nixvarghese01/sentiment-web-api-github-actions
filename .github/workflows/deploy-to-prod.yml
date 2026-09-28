@@ -1,75 +1,44 @@
-# This is final production build and deploy
+# CD: on a version tag (v*), build and push the web API image and apply the prod manifests on GKE.
+name: CD - deploy to production
 
-name: CD - deploy to production 
-
-# Controls when the workflow will run
 on:
-# Triggers the workflow on push or pull request events but only for the "master" branch 
-  create:
+  push:
     tags:
-     - 'v*'
-     
-#global environment variable 
-env: 
- sonar_scanner_version: 4.7.0.2747-linux
- PROJECT_ID: ${{ secrets.GKE_PROJECT }}
- GKE_CLUSTER: champion2    # Add your cluster name here.
- GKE_ZONE: us-west1-a   # Add your cluster zone here.
- 
+      - 'v*'
 
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+env:
+  IMAGE: nixvarghese03/coit-backend1
+  GKE_CLUSTER: champion2   # cluster name
+  GKE_ZONE: us-west1-a     # cluster zone
+
 jobs:
-  # This workflow contains a single job called "build"
-  buildandpush:
-    # The type of runner that the job will run on
+  build-and-deploy:
     runs-on: ubuntu-latest
-
-    # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-      - uses: actions/checkout@v3
-    
-      # Docker Login
-      - name: Docker login
-        env:
-         DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-         DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-        run: |
-         docker login -u $DOCKERHUB_USERNAME -p $DOCKERHUB_TOKEN
-            
-      # Build container image 
-      - name: build container image  
-        run: | 
-         docker build coit-frontend -t nixvarghese03/coit-simple-micro-ga:latest -f coit-frontend/Dockerfile-multistage
-     
-      # push container image 
-      - name: push container image  
-        run: | 
-         docker push nixvarghese03/coit-simple-micro-ga:latest 
-         
-      # Setup gcloud CLI
-      - uses: google-github-actions/setup-gcloud@94337306dda8180d967a56932ceb4ddcf01edae7
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
         with:
-          service_account_key: ${{ secrets.GKE_SA_KEY }}
-          project_id: ${{ secrets.GKE_PROJECT }}
-          
-      # Get the GKE credentials so we can deploy to the cluster
-      - uses: google-github-actions/get-gke-credentials@fb08709ba27618c31c09e014e1d8364b02e5042e
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push the image
+        run: |
+          docker build coit-backend1 -f coit-backend1/Dockerfile-multistage -t $IMAGE:latest -t $IMAGE:${{ github.ref_name }}
+          docker push $IMAGE:latest
+          docker push $IMAGE:${{ github.ref_name }}
+
+      # GKE_SA_KEY must hold the service account JSON key
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GKE_SA_KEY }}
+
+      - uses: google-github-actions/get-gke-credentials@v2
         with:
           cluster_name: ${{ env.GKE_CLUSTER }}
           location: ${{ env.GKE_ZONE }}
-          credentials: ${{ secrets.GKE_SA_KEY }}
-          
-      # Deploy the Docker image to the GKE cluster
-      - name: Deploy
-        run: |
-          kubectl create namespace prod 
-          cd frontend-kustomize-prod
-          kubectl apply -k .
 
-      # Delete stage namespace 
-      #- name: Delete prod namespace
-      #  run: | 
-      #  sleep 60
-      #   kubectl delete namespace prod
-     
+      - name: Apply prod manifests (cert-manager issuers and RBAC)
+        run: |
+          kubectl create namespace prod --dry-run=client -o yaml | kubectl apply -f -
+          kubectl apply -n prod -R -f backend1-kustomize-prod

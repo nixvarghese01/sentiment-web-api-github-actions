@@ -26,7 +26,7 @@ docker build -f Dockerfile-multistage -t <dockerhub-user>/coit-backend1 .
 ## Required GitHub secrets
 `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`, `GKE_PROJECT`, `GKE_SA_KEY`, `SONARQUBE_PROJECT`, `SONARQUBE_URL`, `API_KEY`
 
-> **Note:** `CI-backend1-stage.yml` was copied from the frontend pipeline and still runs `cd coit-frontend` and `npm test`. Point those steps at `coit-backend1` (Maven) before relying on it.
+> `GKE_SA_KEY` must contain the GCP service account JSON key. The stage and prod folders currently hold cert-manager issuers and RBAC only, so add a Deployment and Service there to run the API on the cluster.
 
 ## Branches
 `feature` (default), `stage`
